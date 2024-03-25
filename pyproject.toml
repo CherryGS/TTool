@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "ttool"
+version = "0.1.0"
+description = "Tool's collection"
+authors = ["tickten <tickten@outlook.com>"]
+license = "MIT"
+packages = [{ include = "ttool" }]
+
+[tool.poetry.scripts]
+ttool = "ttool:app"
+
+
+[tool.poetry.dependencies]
+python = "^3.12"
+typer = { extras = ["all"], version = "^0.9.0" }
+pyexiv2 = "^2.12.0"
+pillow = "^10.2.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
