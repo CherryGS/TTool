@@ -7,7 +7,7 @@
 """
 
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from itertools import filterfalse
 import os
 from pathlib import Path
@@ -48,10 +48,12 @@ class NAIPrompt:
     lora_clip_weights: None
     uc: str
     request_type: str
-    add_original_image: bool = False
-    reference_strength: float = 0
-    signed_hash: str = ""
+    reference_information_extracted_multiple: list[float] = field(default_factory=list)
+    reference_strength_multiple: list[float] = field(default_factory=list)
     reference_information_extracted: float = 0
+    reference_strength: float = 0
+    add_original_image: bool = False
+    signed_hash: str = ""
     legacy_v3_extend: bool = False
     strength: int = 0
     noise: int = 0
@@ -59,8 +61,20 @@ class NAIPrompt:
     legacy: int = 0
 
 
+def extract_data(f: Path):
+    with Image.open(f, "r") as i:
+        d = NAIPrompt(**json.loads(i.info["Comment"]))
+    return d
+
+
+@app.command(help="将图片的信息提取并保存成 json")
+def extract(f: Path):
+    with open(f"{f.stem}.json", "w") as e:
+        e.write(json.dumps(asdict(extract_data(f))))
+
+
 @app.command(
-    help="将 NAI/SD 生成图片中的 Prompt 和一些额外信息转成 tag list 存储在图片中"
+    help="将 NAI/SD 生成图片中的 Prompt 和一些额外信息转成 tag list 存储在图片中便于 digikam 识别"
 )
 def run(path: Path, debug: Annotated[int, Option()] = 4):
     pyexiv2.set_log_level(debug)
@@ -72,15 +86,15 @@ def run(path: Path, debug: Annotated[int, Option()] = 4):
             raise Abort()
         ff = list(filterfalse(lambda x: False if x.is_file() else True, path.iterdir()))
     for f in track(ff):
+        if f.suffix != ".png":
+            continue
         try:
             sta = f.stat()
-            with Image.open(f, "r") as i:
-                d = NAIPrompt(**json.loads(i.info["Comment"]))
+            d = extract_data(f)
             with open(f, "rb+") as ff:
                 with pyexiv2.ImageData(ff.read()) as i:
                     if "Xmp.digiKam.TagsList" in i.read_xmp():
                         continue
-
                     p = list(
                         map(
                             lambda x: f"NAI/{x.replace('{', '').replace('}', '').replace('[', '').replace(']', '').strip()}",
