@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from random import randint, random, sample
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from anyutils.logger import get_console_logger
 from novelai_api import NovelAIAPI, NovelAIError
@@ -27,7 +27,7 @@ opt_size = ((1216, 832), (832, 1216), (1024, 1024))
 logger = get_console_logger("novelai_enum", True)
 
 
-async def gen(prompt: str, scale: float = 10, rescale: float = 0.2):
+async def gen(prompt: str, options: dict[str, Any] = {}):
 
     path = Path(os.getcwd()) / "novelai.secret.json"
     with open(path, "r") as f:
@@ -37,19 +37,18 @@ async def gen(prompt: str, scale: float = 10, rescale: float = 0.2):
     await client.login_with_token(config.token)
 
     setting = ImagePreset.from_v3_config()
-    setting.uc = """
-                bad anatomy, bad hands, @_@, mismatched pupils, glowing eyes, female pubic hair, futanari, censored, long body, bad feet, condom, sketch, greyscale
-                """
+    setting.uc = ""
     setting.uc_preset = UCPreset.Preset_Heavy
     setting.resolution = opt_size[0]
     setting.steps = 28
-    setting.scale = scale
+    setting.scale = 6
     setting.uncond_scale = 1
-    setting.cfg_rescale = rescale
+    setting.cfg_rescale = 0
     setting.smea = True
     setting.smea_dyn = True
     setting.sampler = ImageSampler.k_euler_ancestral
     setting.seed = randint(1, 999999999)
+    setting.update(options)
 
     img = list()
     async for i in client.generate_image(
@@ -72,42 +71,7 @@ def read_as_list(path: Path):
         )
 
 
-def format_as_set(src: Path, tar: Path | None = None, sep: str = ","):
-    s: set[str] = set()
-    if tar is None:
-        tar = src
-
-    with open(src, "r") as f:
-        for i in f:
-            l = set(filter(lambda x: x, map(lambda x: x.strip(), i.split(sep))))
-            s |= l
-
-    with open(tar, "w") as f:
-        for i in sorted(s):
-            f.write(i + "\n")
-
-
 app = Typer()
-
-
-save_path = Path(r"C:\Users\TickT\Downloads\Misc")
-
-base_path = Path(r"E:\AI\NAI Source")
-artist_path = base_path / "artist.txt"
-scene_path = base_path / "scene.txt"
-style_path = base_path / "style.txt"
-action_path = base_path / "action.txt"
-
-
-class LoopConfig(BaseModel):
-    random_stype: bool = True
-    random_scene: bool = True
-    random_artist: bool = True
-
-    action_range: tuple[int, int] = (0, -1)
-    style_range: tuple[int, int] = (0, -1)
-    scene_range: tuple[int, int] = (0, -1)
-    artist_range: tuple[int, int] = (0, -1)
 
 
 class Prob(BaseModel):
@@ -148,6 +112,10 @@ class Function(BaseModel):
     data_select: list[SelectSettings]
     behavior: dict[str, Behavior]
     repeat: int = Field(1)
+    img_path: Path = Field(description="图片保存路径")
+    uc: str = Field(
+        "bad anatomy, bad hands, @_@, mismatched pupils, glowing eyes, female pubic hair, futanari, censored, long body, bad feet, condom"
+    )
 
 
 class Config(BaseModel):
@@ -202,24 +170,6 @@ def upordown(t: Part):
     return res
 
 
-# def get_style(artist_list: list[str], scene_list: list[str]):
-#     mn = 2
-#     mx = 15
-#     cnt = sample(range(mn, mx + 1), 1, counts=reversed(range(mn, mx + 1)))
-#     res = sample(artist_list, cnt[0])
-#     res = [upordown(i) for i in sorted(res)]
-#     logger.info(f"Artist count: {cnt[0]}")
-
-#     prompt = ", ".join(res)
-
-#     if random() < 0.6:
-#         res = sample(scene_list, randint(0, 5))  # 风格个数
-#         res = [upordown(i) for i in sorted(res)]
-
-#         prompt = ", ".join([prompt, ", ".join(res)])
-#     return prompt
-
-
 @app.command("tojson", help="将列表中的每一行放到 src 中，排序去重去空行")
 def parse_to_json(
     input: Annotated[Path, Argument()] = Path("data.txt"),
@@ -253,17 +203,6 @@ def get_schema(path: Path = Path(".")):
 @app.command()
 def loop(config_path: Path, name: str):
 
-    # def generate(data: Iterable, p: Callable):
-    #     idx = 0
-    #     for i in data:
-    #         idx += 1
-    #         yield (idx, i)
-    #     while True:
-    #         yield (-1, p())
-
-    # def closure():
-    #     return get_style(artist_list, scene_list)
-
     def generate_image(dep: int = 0, prompt: str = "", name: str = ""):
         try:
             if dep == len(order):
@@ -277,7 +216,13 @@ def loop(config_path: Path, name: str):
                     logger.info(f"正在生成图片到 '{path}'")
                     logger.debug(f"Prompt: '{prompt}'")
 
-                    img = asyncio.run(gen(prompt, scale, rescale))
+                    options = {
+                        "scale": scale,
+                        "cfg_rescale": rescale,
+                        "uc": function.uc,
+                    }
+
+                    img = asyncio.run(gen(prompt, options))
                     with open(path, "wb") as f:
                         f.write(img)
 
@@ -335,163 +280,27 @@ def loop(config_path: Path, name: str):
             time.sleep(60)
 
     config_path = config_path.absolute()
-    a, data = parser(config_path, name)
+    config, data = parser(config_path, name)
+    function = config.function[name]
 
     # 所有项的遍历顺序及相关行为 (所需项的名字, 行为)
-    order = list(a.function[name].behavior.items())
+    order = list(function.behavior.items())
+
+    save_path = function.img_path
 
     logger.info(f"本次共有遍历项 {len(order)} 个")
-    logger.info(f"本次循环次数为 {a.function[name].repeat} 次")
+    logger.info(f"本次循环次数为 {function.repeat} 次")
+    logger.info(f"图片保存文件夹为 {save_path}")
+
+    time.sleep(3)
+
     logger.info("开始循环")
 
-    for i in range(a.function[name].repeat):
+    for i in range(function.repeat):
         logger.info(f"第 {i+1} 次循环")
         generate_image()
 
     logger.info("结束循环")
-
-    exit(0)
-    scene_list = read_as_list(scene_path)
-    artist_list = read_as_list(artist_path)
-    style_list = read_as_list(style_path)
-
-    data = NaiThing.model_validate_json(action_path.read_text())
-    action_list = data.action
-    style_list = data.style
-
-    errCnt = 0
-
-    for style_idx, style in generate(
-        style_list[style_range[0] - 1 : style_range[1]], closure
-    ):
-        for action in action_list:
-            for scale, rescale in [(6, 0), (8, 0.1), (10, 0.2)]:
-
-                try:
-                    logger.info(
-                        f"--- style({style_idx}) - action({action.name}) - scale({scale}) ---"
-                    )
-
-                    prompt = ",".join([style, action.src])
-                    img = asyncio.run(gen(prompt, scale, rescale))
-
-                    config_path = (
-                        save_path
-                        / f"style({style_idx})_action({action.name})_scale({scale})_time({int(time.time())}).png"
-                    )
-
-                    with open(config_path, "wb") as f:
-                        f.write(img)
-
-                    logger.info(f"{config_path.name}")
-
-                except Exception as e:
-                    errCnt += 1
-                    logger.error(e)
-                    time.sleep(5)
-
-                finally:
-                    logger.debug(f"Prompt: '{prompt}'")
-                    if errCnt == 5:
-                        logger.error("Too many tries...")
-                        time.sleep(randint(600, 1200))
-                        errCnt = 0
-
-
-# @app.command()
-# def art(repeat: int = 10000, action_target: int = 0, style_target: int = 0):
-
-#     def get_style():
-#         mn = 1
-#         mx = 15
-#         cnt = sample(range(mn, mx + 1), 1, counts=reversed(range(mn, mx + 1)))
-#         res = sample(artist_list, cnt[0])
-#         res = [upordown(i) for i in sorted(res)]
-#         logger.info(f"Artist count: {cnt[0]}")
-
-#         prompt = ", ".join(res)
-
-#         if random() < 0.6:
-#             res = sample(scene_list, randint(0, 5))  # 风格个数
-#             res = [upordown(i) for i in sorted(res)]
-
-#             prompt = ", ".join([prompt, ", ".join(res)])
-#         return prompt
-
-#     scene_list = read_as_list(scene_path)
-#     artist_list = read_as_list(artist_path)
-#     action_list = read_as_list(action_path)
-#     style_list = read_as_list(style_path)
-#     errCnt = 0
-
-#     for i in range(repeat):
-#         time.sleep(1)
-#         logger.info(f"------- Running {i+1} loop -------")
-
-#         # action
-#         try:
-#             action_list_idx = randint(1, len(action_list))
-#             if action_target == 0:
-#                 action_part = action_list[action_list_idx - 1]
-#             else:
-#                 action_list_idx = action_target
-#                 action_part = action_list[action_target - 1]
-#         except Exception as e:
-#             logger.warning("没有符合条件的 action 项, 随机选择")
-#             action_part = action_list[action_list_idx - 1]
-
-#         # style
-#         try:
-#             style_list_idx = randint(1, len(style_list))
-#             if style_target == 0:
-#                 style_part = get_style()
-#                 style_list_idx = 0
-#             else:
-#                 style_list_idx = style_target
-#                 style_part = style_list[style_target - 1]
-
-#         except Exception as e:
-#             logger.warning("没有符合条件的 style 项, 随机选择")
-#             style_part = style_list[style_list_idx - 1]
-
-#         # main
-#         try:
-#             prompt = ""
-
-#             scale = round(random() * 4 + 6, 1)
-#             rescale = round(0.2 * max(0, (scale - 7)) / 3, 2)
-
-#             logger.info(f"Scale & rescale: {(scale, rescale)}")
-
-#             logger.info(f"Style: '{style_part}'")
-#             logger.info(f"Action: '{action_part}'")
-
-#             prompt = ", ".join(
-#                 [style_part, action_part] if action_part else [style_part]
-#             )
-
-#             img = asyncio.run(gen(prompt, scale, rescale))
-
-#             path = (
-#                 save_path
-#                 / f"{int(time.time())}_style({style_list_idx})_action({action_list_idx}).png"
-#             )
-#             with open(path, "wb") as f:
-#                 f.write(img)
-
-#             logger.info(f"Image: '{path.name}'")
-#             errCnt = 0
-
-#         except Exception as e:
-#             logger.error(e)
-#             time.sleep(5)
-#             errCnt += 1
-
-#         finally:
-#             logger.debug(f"Prompt: '{prompt}'")
-#             if errCnt == 10:
-#                 logger.error("Too many tries...")
-#                 break
 
 
 if __name__ == "__main__":
