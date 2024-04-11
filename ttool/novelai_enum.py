@@ -290,7 +290,7 @@ def loop(config_path: Path, name: str):
 
     logger.info(f"本次共有遍历项 {len(order)} 个")
     logger.info(f"本次循环次数为 {function.repeat} 次")
-    logger.info(f"图片保存文件夹为 {save_path}")
+    logger.info(f"图片保存文件夹为 '{save_path}'")
 
     time.sleep(3)
 
