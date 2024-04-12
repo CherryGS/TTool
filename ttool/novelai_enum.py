@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 import json
 import os
 import time
@@ -7,7 +8,7 @@ from pathlib import Path
 from random import randint, random, sample
 from typing import Annotated, Any, Literal
 
-from anyutils.logger import get_console_logger
+from anyutils.logger import get_console_logger, get_env_logger_info
 from novelai_api import NovelAIAPI, NovelAIError
 from novelai_api.ImagePreset import ImageModel, ImagePreset, ImageSampler, UCPreset
 from pydantic import BaseModel, Field
@@ -23,8 +24,6 @@ class NaiConfig:
 
 
 opt_size = ((1216, 832), (832, 1216), (1024, 1024))
-
-logger = get_console_logger("novelai_enum", True)
 
 
 async def gen(prompt: str, options: dict[str, Any] = {}):
@@ -62,7 +61,7 @@ async def gen(prompt: str, options: dict[str, Any] = {}):
 
 
 def read_as_list(path: Path):
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf8") as f:
         return list(
             filter(
                 lambda x: x,
@@ -72,35 +71,38 @@ def read_as_list(path: Path):
 
 
 app = Typer()
+logger = get_console_logger("novelai_enum", True)
 
 
 class Prob(BaseModel):
     """目前概率上优先级是 part > data > behavior"""
 
-    change_prob: float = Field(-1, description="发生权重改变的概率限度")
-    up_prob: float = Field(0, description="权重改变是升级的概率")
-    max_change: int = Field(3)
+    change_prob: float = Field(-1, description="发生权重改变的概率限度", init=False)
+    up_prob: float = Field(0, description="权重改变是升级的概率", init=False)
+    max_change: int = Field(3, init=False)
 
 
 class Part(Prob):
     src: str
-    name: str
+    name: str | None = None
     description: str | None = None
+    resolution: tuple[int, int] | None = Field(
+        None, init=False, description="图片的大小, 后面会覆盖前面"
+    )
+
+    def __hash__(self) -> int:
+        return hash(self.src)
 
 
 class Parts(BaseModel):
     src: list[Part]
-
-
-class PathCollection(BaseModel):
-    base: Path = Field(description="可以是绝对路径，也可以是以该文件为中心的相对路径.")
-    src: dict[str, Path]
+    description: str | None = Field(None, init=False)
 
 
 class Behavior(Prob):
     type: Literal["loop", "choice"]
     min: int = Field(description="1 indexed")
-    max: int = Field(description="neg value used like python slice")
+    max: int = Field(description="会和元素长度取 min")
     cnt: int = Field(1, description="选择的次数")
 
 
@@ -111,11 +113,21 @@ class SelectSettings(Prob):
 class Function(BaseModel):
     data_select: list[SelectSettings]
     behavior: dict[str, Behavior]
-    repeat: int = Field(1)
+    repeat: int = Field(1, description="该部分重复次数")
     img_path: Path = Field(description="图片保存路径")
-    uc: str = Field(
-        "bad anatomy, bad hands, @_@, mismatched pupils, glowing eyes, female pubic hair, futanari, censored, long body, bad feet, condom"
+    default_resolution: tuple[int, int] = Field(
+        opt_size[0], init=False, description="默认图片大小"
     )
+    uc: str = Field(
+        "bad anatomy, bad hands, @_@, mismatched pupils, glowing eyes, female pubic hair, futanari, censored, long body, bad feet, condom",
+        init=False,
+        description="负面提示词",
+    )
+
+
+class PathCollection(BaseModel):
+    base: Path = Field(description="可以是绝对路径，也可以是以该文件为中心的相对路径.")
+    src: dict[str, list[Path]]
 
 
 class Config(BaseModel):
@@ -131,24 +143,29 @@ def parser(path: Path, name: str):
 
     has_custom_prop = False
 
-    config = Config.model_validate_json(path.read_text())
+    config = Config.model_validate_json(path.read_text(encoding="utf8"))
     for i in config.function[name].data_select:
         paths = config.data[i.name]
         for j in paths.src:
-            if not paths.src[j].is_absolute():
-                file = paths.base.absolute() / paths.src[j]
-            else:
-                file = paths.src[j]
-            parts = Parts.model_validate_json(file.read_text())
-            for k in parts.src:
-                if k.change_prob == -1:
-                    continue
-                has_custom_prop = True
-                k.change_prob = i.change_prob
-                k.up_prob = i.up_prob
-            if j not in res:
-                res[j] = list()
-            res[j].extend(parts.src)
+            for path in paths.src[j]:
+                if not path.is_absolute():
+                    file = paths.base.absolute() / path
+                else:
+                    file = path
+
+                parts = Parts.model_validate_json(file.read_text(encoding="utf8"))
+                for part in parts.src:
+                    if part.name == None:
+                        part.name = part.src
+                    if part.change_prob == -1:
+                        continue
+                    part.change_prob = i.change_prob
+                    part.up_prob = i.up_prob
+                    has_custom_prop = True
+                if j not in res:
+                    res[j] = list()
+                res[j].extend(parts.src)
+
     if has_custom_prop:
         logger.warning("有自定义概率的节点")
     os.chdir(now)
@@ -166,7 +183,6 @@ def upordown(t: Part):
     else:
         res = "".join(["[" * c, t.src, "]" * c])
     logger.debug(t)
-    logger.debug(c)
     return res
 
 
@@ -177,9 +193,7 @@ def parse_to_json(
 ):
     parts = Parts(src=list())
     for j, i in enumerate(sorted(set(read_as_list(input)))):
-        parts.src.append(
-            Part(src=i, name=f"{j}", change_prob=-1, up_prob=0, max_change=5)
-        )
+        parts.src.append(Part(src=i, name=f"{j}", description=f"{datetime.now()}"))
     output.write_text(parts.model_dump_json())
 
 
@@ -187,7 +201,7 @@ def parse_to_json(
 def combine_json(files: list[Path], output: Path = Path("combine.json")):
     s: list[Part] = list()
     for file in files:
-        p = Parts.model_validate_json(file.read_text())
+        p = Parts.model_validate_json(file.read_text(encoding="utf8"))
         s.extend(p.src)
     output.write_text(Parts(src=s).model_dump_json())
 
@@ -203,24 +217,28 @@ def get_schema(path: Path = Path(".")):
 @app.command()
 def loop(config_path: Path, name: str):
 
-    def generate_image(dep: int = 0, prompt: str = "", name: str = ""):
+    def generate_image(dep: int, prompt: str, name: str, resolution: tuple[int, int]):
         try:
             if dep == len(order):
                 for scale, rescale in ((6, 0), (8, 0.1), (10, 0.2)):
                     path = (
                         save_path
-                        / f"{name}_scale({scale})_time({int(time.time())}).png"
+                        / f"{name}_scale({scale})_time({int(time.time())}).png".replace(
+                            ":", "-"
+                        )
                     )
-
-                    time.sleep(2)
-                    logger.info(f"正在生成图片到 '{path}'")
-                    logger.debug(f"Prompt: '{prompt}'")
 
                     options = {
                         "scale": scale,
                         "cfg_rescale": rescale,
                         "uc": function.uc,
+                        "resolution": resolution,
                     }
+
+                    time.sleep(2)
+                    logger.info(f"正在生成图片到 '{path}'")
+                    logger.debug(f"Prompt: '{prompt}'")
+                    logger.debug(f"options: {options}")
 
                     img = asyncio.run(gen(prompt, options))
                     with open(path, "wb") as f:
@@ -252,6 +270,10 @@ def loop(config_path: Path, name: str):
                         if len(res) == 0:
                             continue
                         res_name = res[0].name
+                        for i in res:
+                            if i.resolution:
+                                resolution = i.resolution
+
                         generate_image(
                             dep + 1,
                             ",".join(
@@ -260,15 +282,19 @@ def loop(config_path: Path, name: str):
                                 )
                             ),
                             f"{name}_{a[0]}({res_name})",
+                            resolution,
                         )
 
                 # 如果是 循环
                 elif a[1].type == "loop":
-                    for i in d[a[1].min - 1 : min(a[1].max, len(d))]:
+                    for i in d[a[1].min - 1 : min(a[1].max, len(d)) + 1]:
+                        if i.resolution:
+                            resolution = i.resolution
                         generate_image(
                             dep + 1,
                             ",".join(filter(lambda x: x, [prompt, upordown(i)])),
                             f"{name}_{a[0]}({i.name})",
+                            resolution,
                         )
 
         except NovelAIError as e:
@@ -286,9 +312,18 @@ def loop(config_path: Path, name: str):
     # 所有项的遍历顺序及相关行为 (所需项的名字, 行为)
     order = list(function.behavior.items())
 
+    # 图片保存路径
     save_path = function.img_path
 
+    logger.debug(f"Debug 环境, 日志级别为 {get_env_logger_info()}")
+    time.sleep(2)
+
     logger.info(f"本次共有遍历项 {len(order)} 个")
+    for i in order:
+        logger.info(
+            f"其中 '{i[0]}' 项中有 {len(data[i[0]])} 个元素 , 其执行策略为 {i[1].type}, 限制为 {(i[1].min, i[1].max)}"
+        )
+
     logger.info(f"本次循环次数为 {function.repeat} 次")
     logger.info(f"图片保存文件夹为 '{save_path}'")
 
@@ -298,7 +333,7 @@ def loop(config_path: Path, name: str):
 
     for i in range(function.repeat):
         logger.info(f"第 {i+1} 次循环")
-        generate_image()
+        generate_image(0, "", "", function.default_resolution)
 
     logger.info("结束循环")
 
