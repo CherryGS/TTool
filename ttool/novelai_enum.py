@@ -8,7 +8,15 @@ from pathlib import Path
 from random import randint, random, sample
 from typing import Annotated, Any, Literal
 
-from anyutils.logger import get_console_logger, get_env_logger_info
+try:
+    from anyutils.logger import get_console_logger
+
+    logger = get_console_logger("novelai_enum", True)
+except Exception as e:
+    from logging import getLogger
+
+    logger = getLogger("novelai_enum")
+
 from novelai_api import NovelAIAPI, NovelAIError
 from novelai_api.ImagePreset import ImageModel, ImagePreset, ImageSampler, UCPreset
 from pydantic import BaseModel, Field
@@ -71,7 +79,6 @@ def read_as_list(path: Path):
 
 
 app = Typer()
-logger = get_console_logger("novelai_enum", True)
 
 
 class Prob(BaseModel):
@@ -99,8 +106,19 @@ class Parts(BaseModel):
     description: str | None = Field(None, init=False)
 
 
+class Loop(BaseModel):
+    name: str
+
+
+class Choice(BaseModel):
+    name: str
+
+
 class Behavior(Prob):
     type: Literal["loop", "choice"]
+    queue: list[str] = Field(description="执行队列")
+    loop: dict[str, Loop] = Field(description="循环执行")
+    choice: dict[str, Choice] = Field(description="随机选择")
     min: int = Field(description="1 indexed")
     max: int = Field(description="会和元素长度取 min")
     cnt: int = Field(1, description="选择的次数")
@@ -315,7 +333,7 @@ def loop(config_path: Path, name: str):
     # 图片保存路径
     save_path = function.img_path
 
-    logger.debug(f"Debug 环境, 日志级别为 {get_env_logger_info()}")
+    logger.debug(f"Debug 环境")
     time.sleep(2)
 
     logger.info(f"本次共有遍历项 {len(order)} 个")
