@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from random import randint, random, sample
-from typing import Annotated, Any
+from typing import Annotated, Any, Self
 
 from aiohttp import ClientConnectorError
 from novelai_api import NovelAIAPI, NovelAIError
@@ -136,6 +136,17 @@ class Unit(UpToDown):
     def __hash__(self) -> int:
         return hash(self.src)
 
+    def __lt__(self, o: Self):
+        return (
+            self.name < o.name
+            if self.name is not None and o.name is not None
+            else (
+                self.name < o.src
+                if self.name is not None
+                else self.src < o.name if o.name is not None else self.src < o.src
+            )
+        )
+
 
 class DataList(UpToDown):
     """数据列"""
@@ -252,7 +263,8 @@ def parser(path: Path, name: str):
 
     data_set: dict[str, list[Unit]] = {}
     for i in _data_set:
-        data_set[i] = list(_data_set[i])
+        data_set[i] = sorted(list(_data_set[i]))
+
     os.chdir(now)
     logger.info("配置文件解析完成...")
     return (space, data_set)
@@ -376,7 +388,7 @@ def loop(config_path: Path, name: str, debug: bool = False, token: str = ""):
 
                             generate_image(
                                 dep + 1,
-                                ",".join(
+                                ", ".join(
                                     filter(
                                         lambda x: x,
                                         [prompt, *[upordown(i, a[1]) for i in res]],
@@ -397,7 +409,7 @@ def loop(config_path: Path, name: str, debug: bool = False, token: str = ""):
                                 resolution = i.resolution
                             generate_image(
                                 dep + 1,
-                                ",".join(
+                                ", ".join(
                                     filter(lambda x: x, [prompt, upordown(i, a[1])])
                                 ),
                                 f"{name}_{a[0]}({i.name})",
