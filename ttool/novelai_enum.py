@@ -1,4 +1,5 @@
 import asyncio
+from enum import Enum
 from genericpath import isfile
 import json
 import os
@@ -6,8 +7,8 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from random import randint, random, sample
-from typing import Annotated, Any, Self
+from random import randint, random, sample, shuffle
+from typing import Annotated, Any, Literal, Self
 
 from aiohttp import ClientConnectorError
 from novelai_api import NovelAIAPI, NovelAIError
@@ -201,13 +202,23 @@ class Space(UpToDown):
     )
 
 
+class StatusEnum(str, Enum):
+    shuffle = "shuffle"
+    sort = "sort"
+
+
+class Table(BaseWithConfig):
+    status: StatusEnum = Field(
+        StatusEnum.sort, description="sort 是按字典序排序, shuffle 是随机打乱"
+    )
+    data: list[Path]
+
+
 class PathCollection(BaseWithConfig):
     """指向数据表的路径合集, 构建数据集所需, 所有 `unit` 按照 `src` 去重"""
 
     base: Path = Field(description="可以是绝对路径，也可以是以该文件为中心的相对路径.")
-    data_table: dict[str, list[Path]] = Field(
-        description="数据表的类型名和相关数据表的路径"
-    )
+    data_table: dict[str, Table] = Field(description="数据表的类型名和相关数据表的路径")
 
 
 class Config(BaseWithConfig):
@@ -238,12 +249,14 @@ def parser(path: Path, name: str):
 
     cfg = global_setting.newer(global_setting, space)
 
+    status: dict[str, StatusEnum] = {}
     for i in space.select:
         paths = config.data_set[i.name]
         cfgg = cfg.newer(i, cfg)
 
         for j in paths.data_table:
-            for path in paths.data_table[j]:
+            status[j] = paths.data_table[j].status
+            for path in paths.data_table[j].data:
                 if not path.is_absolute():
                     file = paths.base.absolute() / path
                 else:
@@ -263,7 +276,14 @@ def parser(path: Path, name: str):
 
     data_set: dict[str, list[Unit]] = {}
     for i in _data_set:
-        data_set[i] = sorted(list(_data_set[i]))
+        match status[i]:
+            case StatusEnum.shuffle:
+                data_set[i] = list(_data_set[i])
+                shuffle(data_set[i])
+            case StatusEnum.sort:
+                data_set[i] = sorted(list(_data_set[i]))
+            case a:
+                raise ValueError(f"No member {a}")
 
     os.chdir(now)
     logger.info("配置文件解析完成...")
