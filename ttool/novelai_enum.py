@@ -52,6 +52,7 @@ async def gen(prompt: str, options: dict[str, Any] = {}):
     setting.cfg_rescale = 0
     setting.smea = True
     setting.smea_dyn = True
+    setting.decrisper = True
     setting.sampler = ImageSampler.k_euler_ancestral
     setting.seed = randint(1, 999999999)
     setting.update(options)
@@ -263,7 +264,6 @@ def upordown(t: Unit, ex: Prob):
     assert not p.max_change is None
     assert not p.up_prob is None
 
-    print(p)
     c = 0
     while random() < p.change_prob:
         c = c + 1
@@ -272,6 +272,10 @@ def upordown(t: Unit, ex: Prob):
         res = "".join(["{" * c, t.src, "}" * c])
     else:
         res = "".join(["[" * c, t.src, "]" * c])
+
+    logger.debug(p)
+    logger.debug(res)
+
     return res
 
 
@@ -309,6 +313,25 @@ def get_schema(path: Path = Path(".")):
         f.write(json.dumps(DataList.model_json_schema()))
 
 
+def receive_image(path: Path, prompt: str, options: dict, errCnt: int = 0):
+    try:
+        time.sleep(2)
+        logger.info(f"正在生成图片到 '{path}'")
+        logger.debug(f"Prompt: '{prompt}'")
+        logger.debug(f"options: {options}")
+
+        img = asyncio.run(gen(prompt, options))
+        with open(path, "wb") as f:
+            f.write(img)
+        logger.info("生成完成")
+
+    except (NovelAIError, ClientConnectorError) as e:
+        logger.error(e)
+        time.sleep(60 * (1 + errCnt))
+        logger.warning(f"尝试重新生成第 {errCnt+1} 次")
+        receive_image(path, prompt, options, errCnt + 1)
+
+
 @app.command()
 def loop(config_path: Path, name: str, debug: bool = False, token: str = ""):
 
@@ -330,17 +353,7 @@ def loop(config_path: Path, name: str, debug: bool = False, token: str = ""):
                         "resolution": resolution,
                     }
 
-                    time.sleep(2)
-                    logger.info(f"正在生成图片到 '{path}'")
-                    logger.debug(f"Prompt: '{prompt}'")
-                    logger.debug(f"options: {options}")
-
-                    img = asyncio.run(gen(prompt, options))
-                    with open(path, "wb") as f:
-                        f.write(img)
-
-                    logger.info("生成完成")
-
+                    receive_image(path, prompt, options)
             else:
                 # 获取当前需要处理的项
                 a = order[dep]
@@ -392,14 +405,6 @@ def loop(config_path: Path, name: str, debug: bool = False, token: str = ""):
                             )
                     case _:
                         raise TypeError("未知的操作类型, 可能是逻辑出现错误")
-
-        except NovelAIError as e:
-            logger.error(e)
-            time.sleep(60)
-
-        except ClientConnectorError as e:
-            logger.error(e)
-            time.sleep(60)
 
         except Exception as e:
             logger.error(e, stack_info=True, exc_info=True)
