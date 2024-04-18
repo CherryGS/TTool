@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from random import randint, random, sample, shuffle
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Any, Iterable, Literal, Self
 
 from aiohttp import ClientConnectorError
 from novelai_api import NovelAIAPI, NovelAIError
@@ -46,7 +46,7 @@ async def gen(prompt: str, options: dict[str, Any] = {}):
     setting = ImagePreset.from_v3_config()
     setting.uc = ""
     setting.uc_preset = UCPreset.Preset_Heavy
-    setting.resolution = opt_size[0]
+    # setting.resolution = opt_size[1]
     setting.steps = 28
     setting.scale = 6
     setting.uncond_scale = 1
@@ -128,11 +128,14 @@ class Unit(UpToDown):
     name: str | None = Field(None, description="数据的名称, 可以省略, 此时名称为内容")
     src: str = Field(description="数据的内容")
     description: str | None = Field(None, description="数据的描述")
-    resolution: tuple[int, int] | None = Field(
-        None,
-        init=False,
-        description="该数据希望对应的图片的大小, 合并时越靠后的数据的值会越先考虑",
-    )
+    resolutions: Annotated[
+        set[tuple[int, int]],
+        Field(
+            {(1216, 832)},
+            init=False,
+            description="默认图片大小(width x height)的集合",
+        ),
+    ] = {(1216, 832)}
 
     def __hash__(self) -> int:
         return hash(self.src)
@@ -176,7 +179,7 @@ class Choice(UpToDown):
 
 
 class Select(UpToDown):
-    """选择的数据集集"""
+    """选择的数据集"""
 
     name: str
 
@@ -184,7 +187,8 @@ class Select(UpToDown):
 class Space(UpToDown):
     """项目空间"""
 
-    select: list[Select]
+    description: Annotated[str, Field(description="描述")] = ""
+    select: list[Select] = Field(description="所选的数据集名称")
 
     queue: list[str] = Field(description="执行队列")
     loop: dict[str, Loop] = Field(description="循环执行")
@@ -192,9 +196,29 @@ class Space(UpToDown):
 
     repeat: int = Field(1, description="该部分重复次数")
     img_path: Path = Field(description="图片保存路径")
-    default_resolution: tuple[int, int] = Field(
-        opt_size[0], init=False, description="默认图片大小"
-    )
+
+    prompt_start: Annotated[
+        str, Field(description="添加到 prompt 最前方的内容, 不需要加逗号")
+    ] = ""
+    prompt_end: Annotated[
+        str, Field(description="添加到 prompt 最后方的内容, 不需要加逗号")
+    ] = ""
+    name_start: Annotated[
+        str, Field(description="添加到文件名最前方的内容, 不需要加逗号")
+    ] = ""
+    name_end: Annotated[
+        str, Field(description="添加到文件名最后方的内容, 不需要加逗号")
+    ] = ""
+
+    default_resolutions: Annotated[
+        set[tuple[int, int]],
+        Field(
+            {(1216, 832)},
+            init=False,
+            description="该数据希望对应的图片的大小的集合",
+        ),
+    ] = {(1216, 832)}
+
     uc: str = Field(
         "bad anatomy, bad hands, @_@, mismatched pupils, glowing eyes, female pubic hair, futanari, censored, long body, bad feet, condom",
         init=False,
@@ -212,12 +236,14 @@ class Table(BaseWithConfig):
         StatusEnum.sort, description="sort 是按字典序排序, shuffle 是随机打乱"
     )
     data: list[Path]
+    base: Annotated[
+        Path, Field(description="可以是绝对路径，也可以是以该文件为中心的相对路径.")
+    ] = Path("")
 
 
 class PathCollection(BaseWithConfig):
     """指向数据表的路径合集, 构建数据集所需, 所有 `unit` 按照 `src` 去重"""
 
-    base: Path = Field(description="可以是绝对路径，也可以是以该文件为中心的相对路径.")
     data_table: dict[str, Table] = Field(description="数据表的类型名和相关数据表的路径")
 
 
@@ -255,10 +281,12 @@ def parser(path: Path, name: str):
         cfgg = cfg.newer(i, cfg)
 
         for j in paths.data_table:
-            status[j] = paths.data_table[j].status
-            for path in paths.data_table[j].data:
+            data_table = paths.data_table[j]
+            status[j] = data_table.status
+
+            for path in data_table.data:
                 if not path.is_absolute():
-                    file = paths.base.absolute() / path
+                    file = data_table.base.absolute() / path
                 else:
                     file = path
 
@@ -367,25 +395,33 @@ def receive_image(path: Path, prompt: str, options: dict, errCnt: int = 0):
 @app.command()
 def loop(config_path: Path, name: str, debug: bool = False, token: str = ""):
 
-    def generate_image(dep: int, prompt: str, name: str, resolution: tuple[int, int]):
+    def merge_prompt(*args: str):
+        return ", ".join(filter(lambda x: x, args))
+
+    def generate_image(
+        dep: int, prompt: str, name: str, resolutions: set[tuple[int, int]]
+    ):
         try:
             if dep == len(order):
                 for scale, rescale in ((6, 0), (8, 0.1), (10, 0.2)):
-                    path = (
-                        save_path
-                        / f"{name}_scale({scale})_time({int(time.time())}).png".replace(
-                            ":", "-"
+                    for resol in resolutions:
+                        path = (
+                            save_path
+                            / f"{name}_scale({scale})_time({int(time.time())})_{space.name_end}.png".replace(
+                                ":", "-"
+                            )
                         )
-                    )
 
-                    options = {
-                        "scale": scale,
-                        "cfg_rescale": rescale,
-                        "uc": space.uc,
-                        "resolution": resolution,
-                    }
+                        options = {
+                            "scale": scale,
+                            "cfg_rescale": rescale,
+                            "uc": space.uc,
+                            "resolution": resol,
+                        }
 
-                    receive_image(path, prompt, options)
+                        prompt = merge_prompt(prompt, space.prompt_end)
+                        receive_image(path, prompt, options)
+
             else:
                 # 获取当前需要处理的项
                 a = order[dep]
@@ -402,9 +438,9 @@ def loop(config_path: Path, name: str, debug: bool = False, token: str = ""):
                             if len(res) == 0:
                                 continue
                             res_name = res[0].name
+                            resolutions = set()
                             for i in res:
-                                if i.resolution:
-                                    resolution = i.resolution
+                                resolutions |= i.resolutions
 
                             generate_image(
                                 dep + 1,
@@ -415,7 +451,7 @@ def loop(config_path: Path, name: str, debug: bool = False, token: str = ""):
                                     )
                                 ),
                                 f"{name}_{a[0]}({res_name})",
-                                resolution,
+                                resolutions,
                             )
                     # 如果是 循环
                     case Loop():
@@ -425,15 +461,17 @@ def loop(config_path: Path, name: str, debug: bool = False, token: str = ""):
                                 and i.name not in a[1].loop_list
                             ):
                                 continue
-                            if i.resolution:
-                                resolution = i.resolution
+
+                            resolutions = set()
+                            resolutions |= i.resolutions
+
                             generate_image(
                                 dep + 1,
                                 ", ".join(
                                     filter(lambda x: x, [prompt, upordown(i, a[1])])
                                 ),
                                 f"{name}_{a[0]}({i.name})",
-                                resolution,
+                                resolutions,
                             )
                     case _:
                         raise TypeError("未知的操作类型, 可能是逻辑出现错误")
@@ -485,7 +523,9 @@ def loop(config_path: Path, name: str, debug: bool = False, token: str = ""):
 
     for i in range(space.repeat):
         logger.info(f"第 {i+1} 次循环")
-        generate_image(0, "", "", space.default_resolution)
+        generate_image(
+            0, space.prompt_start, space.name_start, space.default_resolutions
+        )
 
     logger.info("结束循环")
 
