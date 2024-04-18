@@ -35,7 +35,6 @@ class NaiConfig:
     token: str
 
 
-opt_size = ((1216, 832), (832, 1216), (1024, 1024))
 global_token: str = ""
 
 
@@ -175,7 +174,9 @@ class Choice(UpToDown):
     select: str = Field(description="所要操作的数据表的名称")
     min: int = Field(1, description="选择数量的下界", init=False)
     max: int = Field(1, description="选择数量的上界,会和序列长度取 min", init=False)
-    cnt: int = Field(1, description="该次选择的重复轮数", init=False)
+    cnt: int = Field(
+        1, description="该次选择的重复轮数,注意每次选择是独立的", init=False
+    )
 
 
 class Select(UpToDown):
@@ -404,7 +405,7 @@ def loop(config_path: Path, name: str, debug: bool = False, token: str = ""):
         try:
             if dep == len(order):
                 for scale, rescale in ((6, 0), (8, 0.1), (10, 0.2)):
-                    for resol in resolutions:
+                    for resolution in resolutions:
                         path = (
                             save_path
                             / f"{name}_scale({scale})_time({int(time.time())})_{space.name_end}.png".replace(
@@ -416,7 +417,7 @@ def loop(config_path: Path, name: str, debug: bool = False, token: str = ""):
                             "scale": scale,
                             "cfg_rescale": rescale,
                             "uc": space.uc,
-                            "resolution": resol,
+                            "resolution": resolution,
                         }
 
                         prompt = merge_prompt(prompt, space.prompt_end)
@@ -437,10 +438,11 @@ def loop(config_path: Path, name: str, debug: bool = False, token: str = ""):
                             )
                             if len(res) == 0:
                                 continue
+
                             res_name = res[0].name
-                            resolutions = set()
+                            _resolutions = set() | resolutions
                             for i in res:
-                                resolutions |= i.resolutions
+                                _resolutions |= i.resolutions
 
                             generate_image(
                                 dep + 1,
@@ -451,8 +453,9 @@ def loop(config_path: Path, name: str, debug: bool = False, token: str = ""):
                                     )
                                 ),
                                 f"{name}_{a[0]}({res_name})",
-                                resolutions,
+                                _resolutions,
                             )
+
                     # 如果是 循环
                     case Loop():
                         for i in d:
@@ -462,8 +465,8 @@ def loop(config_path: Path, name: str, debug: bool = False, token: str = ""):
                             ):
                                 continue
 
-                            resolutions = set()
-                            resolutions |= i.resolutions
+                            _resolutions = set() | resolutions
+                            _resolutions |= i.resolutions
 
                             generate_image(
                                 dep + 1,
@@ -471,8 +474,9 @@ def loop(config_path: Path, name: str, debug: bool = False, token: str = ""):
                                     filter(lambda x: x, [prompt, upordown(i, a[1])])
                                 ),
                                 f"{name}_{a[0]}({i.name})",
-                                resolutions,
+                                _resolutions,
                             )
+
                     case _:
                         raise TypeError("未知的操作类型, 可能是逻辑出现错误")
 
