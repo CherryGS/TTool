@@ -6,6 +6,7 @@
 * 会将权重去掉，但原始 prompt 还在metadata里
 """
 
+import dataclasses
 import json
 from dataclasses import asdict, dataclass, field
 from itertools import filterfalse
@@ -26,59 +27,39 @@ app = Typer()
 class NAIPrompt:
     prompt: str
     steps: int
-    height: int
-    width: int
     scale: float
     uncond_scale: float
     cfg_rescale: float
     seed: int
-    n_samples: int
-    hide_debug_overlay: bool
     noise_schedule: str
     sampler: str
-    controlnet_strength: float
-    controlnet_model: None
-    dynamic_thresholding: bool
-    dynamic_thresholding_percentile: float
-    dynamic_thresholding_mimic_scale: float
-    sm: bool
-    sm_dyn: bool
-    skip_cfg_below_sigma: float
-    lora_unet_weights: None
-    lora_clip_weights: None
-    uc: str
-    request_type: str
-    reference_information_extracted_multiple: list[float] = field(default_factory=list)
-    reference_strength_multiple: list[float] = field(default_factory=list)
-    reference_information_extracted: float = 0
-    reference_strength: float = 0
-    add_original_image: bool = False
-    signed_hash: str = ""
-    legacy_v3_extend: bool = False
-    strength: int = 0
-    noise: int = 0
-    extra_noise_seed: int = 0
-    legacy: int = 0
+
+    @classmethod
+    def from_dict(cls, **kw):
+        return cls(
+            **{
+                k: v
+                for k, v in kw.items()
+                if k in list(map(lambda x: x.name, dataclasses.fields(cls)))
+            }
+        )
 
 
 def extract_data(f: Path):
     with Image.open(f, "r") as i:
-        d = NAIPrompt(**json.loads(i.info["Comment"]))
+        d = NAIPrompt.from_dict(**json.loads(i.info["Comment"]))
     return d
 
 
-@app.command(help="将图片的信息提取并保存成 json")
+@app.command(help="提取图片信息并保存成 json")
 def extract(f: Path):
     with open(f"{f.stem}.json", "w") as e:
         e.write(json.dumps(asdict(extract_data(f))))
 
 
-@app.command(
-    help="将 NAI/SD 生成图片中的 Prompt 和一些额外信息转成 tag list 存储在图片中便于 digikam 识别"
-)
-def run(path: Path, debug: Annotated[int, Option()] = 4):
+@app.command(help="转变 NAI/SD 生成图片中的元数据以便于 digikam 识别")
+def transfer(path: Path, debug: Annotated[int, Option()] = 4):
     pyexiv2.set_log_level(debug)
-    pyexiv2.enableBMFF()
     if path.is_file():
         ff = [path]
     else:

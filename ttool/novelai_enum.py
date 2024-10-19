@@ -19,7 +19,7 @@ from rich.traceback import install
 from typer import Argument, Typer
 
 try:
-    from anyutils.logger import get_console_logger
+    from anyutils.logger import get_rich_logger as get_console_logger
 
     logger = get_console_logger("novelai_enum", True)
 except Exception as e:
